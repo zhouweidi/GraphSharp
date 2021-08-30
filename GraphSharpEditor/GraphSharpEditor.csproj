@@ -1,0 +1,22 @@
+﻿<Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
+
+  <PropertyGroup>
+    <TargetFramework>netcoreapp3.1</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <RootNamespace>GraphSharp.Editor</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\GraphSharp\GraphSharp.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Update="GraphView.cs">
+      <SubType>UserControl</SubType>
+    </Compile>
+    <Compile Update="GraphEditor.cs">
+      <SubType>Form</SubType>
+    </Compile>
+  </ItemGroup>
+
+</Project>
