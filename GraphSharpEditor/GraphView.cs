@@ -13,6 +13,7 @@ namespace GraphSharp.Editor
 	public partial class GraphView : UserControl
 	{
 		Graph m_graph = new Graph();
+		ILoader m_loader;
 		List<NodeWidget> m_nodeWidgets = new List<NodeWidget>();
 
 		public Selection Selection { get; private set; } = new Selection();
@@ -156,8 +157,11 @@ namespace GraphSharp.Editor
 			m_selectionRubberBandBrush = new SolidBrush(Color.FromArgb(Math.Clamp(SelectionRubberBandBackAlpha, 0, 255), SelectionRubberBandColor));
 		}
 
-		public void SetNodeTypes(IEnumerable<Type> nodeTypes)
+		public void Initialize(ILoader loader, IEnumerable<Type> nodeTypes)
 		{
+			m_loader = loader ?? DefaultLoader.Instance;
+
+			// Set node types
 			if (nodeTypes.Any(t => !t.IsSubclassOf(typeof(Node))))
 				throw new Exception("Not a derived class of Node");
 
@@ -265,7 +269,7 @@ namespace GraphSharp.Editor
 
 		void OnCreateNode(Type nodeType)
 		{
-			var node = (Node)Activator.CreateInstance(nodeType);
+			var node = (Node)m_loader.CreateMethodContainer(nodeType, new NodeWidget());
 
 			AddNode(node, m_lastRightClickLocation);
 		}
@@ -295,14 +299,14 @@ namespace GraphSharp.Editor
 
 		public NodeWidget AddNode(Node node, Point location)
 		{
-			m_graph.AddNode(node);
+			var nodeWidget = (NodeWidget)node.Handler;
 
-			var nodeWidget = new NodeWidget(this, node)
-			{
-				Location = location
-			};
+			nodeWidget.Initialize(this, node);
+			nodeWidget.Location = location;
 
 			m_nodeWidgets.Add(nodeWidget);
+
+			m_graph.AddNode(node);
 
 			Invalidate();
 
@@ -330,7 +334,7 @@ namespace GraphSharp.Editor
 
 		public void Reset()
 		{
-			Reload(new Graph(), null);
+			Reload(new Graph());
 		}
 
 		public void SelectAllNodes()
@@ -653,8 +657,6 @@ namespace GraphSharp.Editor
 			using var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true });
 
 			writer.WriteStartObject();
-
-			// Graph nodes
 			{
 				writer.WriteStartArray("Nodes");
 
@@ -662,85 +664,25 @@ namespace GraphSharp.Editor
 
 				writer.WriteEndArray();
 			}
-
-			// Graph node locations
-			{
-				writer.WriteStartArray("NodeLocations");
-
-				foreach (var nodeWidget in m_nodeWidgets)
-				{
-					var locationText = PointToString(nodeWidget.Location);
-					writer.WriteStringValue(locationText);
-				}
-
-				writer.WriteEndArray();
-			}
-
 			writer.WriteEndObject();
 		}
 
-		public void LoadGraph(Stream stream, ILoader loader)
+		public void LoadGraph(Stream stream)
 		{
 			using var document = JsonDocument.Parse(stream);
 			var rootElement = document.RootElement;
 
-			// Graph nodes
 			var graph = new Graph();
 			{
 				var nodesElement = rootElement.GetProperty("Nodes");
 
-				if (loader == null)
-					loader = DefaultLoader.Instance;
-
-				graph.Load(nodesElement, loader);
+				graph.Load(nodesElement, m_loader);
 			}
 
-			// Graph node locations
-			var locations = new List<Point?>();
-			{
-				var locationsElement = rootElement.GetProperty("NodeLocations");
-
-				foreach (var e in locationsElement.EnumerateArray())
-				{
-					var locationText = e.GetString();
-					var location = StringToPoint(locationText);
-
-					locations.Add(location);
-				}
-			}
-
-			// Error info
-			string locationsErrorInfo = null;
-			{
-				if (graph.Nodes.Count != locations.Count)
-					locationsErrorInfo = $"Nodes count ({graph.Nodes.Count}) doesn't match locations count ({locations.Count})";
-				else
-				{
-					var emptyIndexes = from i in Enumerable.Range(0, locations.Count)
-									   where locations[i] == null
-									   select i;
-
-					if (emptyIndexes.Any())
-					{
-						var indexesText = string.Join(", ", emptyIndexes);
-						locationsErrorInfo = $"Bad location indexes: {indexesText}";
-					}
-				}
-			}
-
-			if (locationsErrorInfo != null)
-			{
-				MessageBox.Show(
-					locationsErrorInfo,
-					"Locations Error",
-					MessageBoxButtons.OK,
-					MessageBoxIcon.Warning);
-			}
-
-			Reload(graph, locations);
+			Reload(graph);
 		}
 
-		void Reload(Graph graph, IReadOnlyList<Point?> locations)
+		void Reload(Graph graph)
 		{
 			var autoEvaluation = AutoEvaluation;
 
@@ -760,14 +702,9 @@ namespace GraphSharp.Editor
 				for (int i = 0; i < m_graph.Nodes.Count; i++)
 				{
 					var node = m_graph.Nodes[i];
-					var nodeWidget = new NodeWidget(this, node);
+					var nodeWidget = NodeWidget.GetNodeWidgetFromNode(node);
 
-					if (i < locations.Count)
-					{
-						var location = locations[i];
-						if (location != null)
-							nodeWidget.Location = location.Value;
-					}
+					nodeWidget.Initialize(this, node);
 
 					m_nodeWidgets.Add(nodeWidget);
 				}
@@ -781,21 +718,6 @@ namespace GraphSharp.Editor
 				Evaluate();
 			else
 				Invalidate();
-		}
-
-		static string PointToString(Point point) => $"{point.X} {point.Y}";
-
-		static Point? StringToPoint(string text)
-		{
-			var components = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-			if (components.Length != 2)
-				return null;
-
-			int x, y;
-			if (!int.TryParse(components[0], out x) || !int.TryParse(components[1], out y))
-				return null;
-
-			return new Point(x, y);
 		}
 
 		#endregion

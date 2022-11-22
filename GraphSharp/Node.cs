@@ -9,14 +9,12 @@ namespace GraphSharp
 {
 	public class Node
 	{
-		public const string DefaultProcessMethod = "Process";
-
 		[Browsable(false)]
 		public Graph Graph { get; internal set; }
-		[Category("Node")]
+		[Browsable(false)]
 		public string Name { get; private set; }
 		[Browsable(false)]
-		public object UserData { get; set; }
+		public INodeHandler Handler { get; private set; }
 
 		MethodInfo m_processMethod;
 		object m_processInstance;
@@ -26,57 +24,34 @@ namespace GraphSharp
 		bool[] m_outParameters;
 		internal object ReturnValue { get; set; }
 
+		Guid? m_serializationId;
+
 		internal object[] Parameters => m_parameters;
-
-		public delegate void OnLinkDelegate(OutPort selfOut, InPort otherIn);
-		public delegate void OnUnlinkDelegate(OutPort selfOut, InPort otherIn);
-		public delegate void OnOutValuesChangedDelegate(Node node);
-
-		public event OnLinkDelegate OnLink;
-		public event OnUnlinkDelegate OnUnlink;
-		public event OnOutValuesChangedDelegate OnOutValuesChanged;
 
 		public override string ToString() => Name;
 
 		#region Initialization
 
-		public static Node FromStaticMethod(Type type, string processMethodName = DefaultProcessMethod, string name = null)
-		{
-			var node = new Node();
-			node.StaticMethod(name, type, processMethodName);
+		Node() // For static-method-binding dummies and Node.FromXxx methods
+		{ }
 
-			return node;
+		protected Node(INodeHandler handler, string processMethodName, string name = null) // For sub-classes
+		{
+			InstanceMethod(handler, name, this, processMethodName);
 		}
 
-		public static Node FromInstanceMethod(object processInstance, string processMethodName = DefaultProcessMethod, string name = null)
+		public static Node FromInstanceMethod(INodeHandler handler, object processInstance, string processMethodName, string name = null)
 		{
 			if (processInstance is Node)
 				throw new ArgumentException($"Unnecessary to create a node for an existing instance of a Node class '{processInstance.GetType().FullName}'", nameof(processInstance));
 
-			var type = processInstance.GetType();
-			if (!ExistsParameterlessConstructor(type))
-				throw new ArgumentException($"No parameterless constructor defined in class '{type.FullName}'", nameof(processInstance));
-
 			var node = new Node();
-			node.InstanceMethod(name, processInstance, processMethodName);
+			node.InstanceMethod(handler, name, processInstance, processMethodName);
 
 			return node;
 		}
 
-		static bool ExistsParameterlessConstructor(Type type) => type.GetConstructor(Type.EmptyTypes) != null;
-
-		Node()
-		{ }
-
-		protected Node(string processMethodName = DefaultProcessMethod, string name = null)
-		{
-			if (!ExistsParameterlessConstructor(GetType()))
-				throw new Exception($"No parameterless constructor defined in class '{GetType().FullName}'");
-
-			InstanceMethod(name, this, processMethodName);
-		}
-
-		void InstanceMethod(string name, object processInstance, string processMethodName)
+		void InstanceMethod(INodeHandler handler, string name, object processInstance, string processMethodName)
 		{
 			if (processInstance == null)
 				throw new ArgumentNullException(nameof(processInstance));
@@ -84,11 +59,11 @@ namespace GraphSharp
 			if (string.IsNullOrEmpty(processMethodName))
 				throw new ArgumentException("Empty process method name", nameof(processMethodName));
 
-			Initialize(name, processInstance.GetType(), processMethodName, BindingFlags.Instance);
+			Initialize(name, handler, processInstance.GetType(), processMethodName, BindingFlags.Instance);
 			m_processInstance = processInstance;
 		}
 
-		void StaticMethod(string name, Type type, string processMethodName)
+		public static Node FromStaticMethod(INodeHandler handler, Type type, string processMethodName, string name = null)
 		{
 			if (type == null)
 				throw new ArgumentNullException(nameof(type));
@@ -96,13 +71,19 @@ namespace GraphSharp
 			if (string.IsNullOrEmpty(processMethodName))
 				throw new ArgumentException("Empty process method name", nameof(processMethodName));
 
-			Initialize(name, type, processMethodName, BindingFlags.Static);
+			var node = new Node();
+			node.Initialize(name, handler, type, processMethodName, BindingFlags.Static);
+
+			return node;
 		}
 
-		void Initialize(string name, Type type, string processMethodName, BindingFlags bindingFlags)
+		void Initialize(string name, INodeHandler handler, Type type, string processMethodName, BindingFlags bindingFlags)
 		{
 			// Node name
 			Name = name ?? $"{type.Name}.{processMethodName}";
+
+			// Handler
+			Handler = handler;
 
 			// Process method
 			m_processMethod = type.GetMethod(processMethodName, bindingFlags | BindingFlags.Public | BindingFlags.NonPublic);
@@ -253,8 +234,12 @@ namespace GraphSharp
 			selfOut.AddEndPort(otherIn);
 			otherIn.EndPort = selfOut;
 
-			OnLink?.Invoke(selfOut, otherIn);
+			OnLink(selfOut, otherIn);
+			Handler?.OnLink(selfOut, otherIn);
 		}
+
+		protected virtual void OnLink(OutPort selfOut, InPort otherIn)
+		{ }
 
 		bool DetectCycle(Node linkToNode)
 		{
@@ -326,8 +311,12 @@ namespace GraphSharp
 			otherIn.EndPort = null;
 			selfOut.RemoveEndPort(otherIn);
 
-			OnUnlink?.Invoke(selfOut, otherIn);
+			OnUnlink(selfOut, otherIn);
+			Handler?.OnUnlink(selfOut, otherIn);
 		}
+
+		protected void OnUnlink(OutPort selfOut, InPort otherIn)
+		{ }
 
 		internal void RemoveLinks()
 		{
@@ -384,8 +373,12 @@ namespace GraphSharp
 			// Call the process method
 			ReturnValue = m_processMethod.Invoke(m_processInstance, m_parameters);
 
-			OnOutValuesChanged?.Invoke(this);
+			OnOutValuesChanged(this);
+			Handler?.OnOutValuesChanged(this);
 		}
+
+		protected virtual void OnOutValuesChanged(Node node)
+		{ }
 
 		internal bool CheckInPortsConnected(bool throwException)
 		{
@@ -395,7 +388,7 @@ namespace GraphSharp
 				var unlinked = m_inPorts.FirstOrDefault(p => p.EndPort == null);
 				if (unlinked != null)
 				{
-					if(throwException)
+					if (throwException)
 						throw new Exception($"The in port '{unlinked}' is not linked");
 
 					return false;
@@ -412,47 +405,51 @@ namespace GraphSharp
 			foreach (var p in m_outPorts)
 				p.ResetValue();
 
-			OnOutValuesChanged?.Invoke(this);
+			OnOutValuesChanged(this);
+			Handler?.OnOutValuesChanged(this);
 		}
 
 		#endregion
 
 		#region Serialization
 
+		Guid GetSerializationId()
+		{
+			if (m_serializationId == null)
+				m_serializationId = Guid.NewGuid();
+
+			return m_serializationId.Value;
+		}
+
 		protected virtual void OnSave(Utf8JsonWriter writer)
 		{ }
 
-		internal void Save(Utf8JsonWriter writer, IReadOnlyList<Node> nodes)
+		internal void Save(Utf8JsonWriter writer)
 		{
 			writer.WriteStartObject();
 
-			// Node block
-			writer.WriteStartObject("Node");
+			// Basic
+			writer.WriteString("Name", Name);
+			writer.WriteString("Id", GetSerializationId());
+			writer.WriteString("MethodContainer", m_processMethod.DeclaringType.AssemblyQualifiedName);
+			writer.WriteString("MethodName", m_processMethod.Name);
+			writer.WriteBoolean("StaticMethod", m_processInstance == null);
+
+			var handlerType = Handler != null ?
+				Handler.GetType().AssemblyQualifiedName :
+				"";
+			writer.WriteString("Handler", handlerType);
+
+			// Out ports
+			if (m_outPorts.Length > 0)
 			{
-				// Basic
-				writer.WriteString("NodeName", Name);
+				writer.WriteStartArray("OutPorts");
 
-				writer.WriteString("MethodContainerType", m_processMethod.DeclaringType.AssemblyQualifiedName);
+				foreach (var outPort in m_outPorts)
+					SaveOutPort(writer, outPort);
 
-				var instanceType = m_processInstance != null ?
-					m_processInstance.GetType().AssemblyQualifiedName :
-					"";
-				writer.WriteString("InstanceType", instanceType);
-
-				writer.WriteString("MethodName", m_processMethod.Name);
-
-				// Out ports
-				if (m_outPorts.Length > 0)
-				{
-					writer.WriteStartArray("OutPorts");
-
-					foreach (var p in m_outPorts)
-						SaveOutPort(writer, nodes, p);
-
-					writer.WriteEndArray();
-				}
+				writer.WriteEndArray();
 			}
-			writer.WriteEndObject();
 
 			// Custom data block (call back for 'this' instance only)
 			if (m_processInstance == this)
@@ -462,10 +459,18 @@ namespace GraphSharp
 				writer.WriteEndObject();
 			}
 
+			// Handler block
+			if (Handler != null)
+			{
+				writer.WriteStartObject("HandlerData");
+				Handler.OnSave(this, writer);
+				writer.WriteEndObject();
+			}
+
 			writer.WriteEndObject();
 		}
 
-		static void SaveOutPort(Utf8JsonWriter writer, IReadOnlyList<Node> nodes, OutPort outPort)
+		static void SaveOutPort(Utf8JsonWriter writer, OutPort outPort)
 		{
 			writer.WriteStartObject();
 
@@ -482,22 +487,11 @@ namespace GraphSharp
 
 				foreach (var ep in outPort.EndPorts)
 				{
-					var nodeIndex = -1;
-					for (int i = 0; i < nodes.Count; i++)
-					{
-						if (nodes[i] == ep.Owner)
-						{
-							nodeIndex = i;
-							break;
-						}
-					}
-
-					if (nodeIndex < 0)
-						throw new Exception($"No end point node found for out port '{outPort}'");
-
 					writer.WriteStartObject();
-					writer.WriteNumber("NodeIndex", nodeIndex);
+
+					writer.WriteString("NodeId", ep.Owner.GetSerializationId());
 					writer.WriteString("InPort", ep.Name);
+
 					writer.WriteEndObject();
 				}
 
@@ -514,12 +508,12 @@ namespace GraphSharp
 		{
 			public class EndPort
 			{
-				public int NodeIndex { get; private set; }
+				public Guid NodeId { get; private set; }
 				public string InPortName { get; private set; }
 
-				public EndPort(int nodeIndex, string inPortName)
+				public EndPort(Guid nodeId, string inPortName)
 				{
-					NodeIndex = nodeIndex;
+					NodeId = nodeId;
 					InPortName = inPortName;
 				}
 			}
@@ -534,66 +528,112 @@ namespace GraphSharp
 				m_endPorts = new List<EndPort>(endPortsCount);
 			}
 
-			public void AddEndPort(int nodeIndex, string inPortName)
+			public void AddEndPort(Guid nodeId, string inPortName)
 			{
-				m_endPorts.Add(new EndPort(nodeIndex, inPortName));
+				m_endPorts.Add(new EndPort(nodeId, inPortName));
 			}
 		}
 
 		internal static (Node, IReadOnlyList<OutPortLinks>) Load(JsonElement element, ILoader loader)
 		{
-			// Node block
-			var nodeElement = element.GetProperty("Node");
-
 			// Basic
-			var nodeName = nodeElement.GetProperty("NodeName").GetString();
+			var nodeName = element.GetProperty("Name").GetString();
+			var nodeId = element.GetProperty("Id").GetGuid();
 
-			var methodContainerTypeName = nodeElement.GetProperty("MethodContainerType").GetString();
+			var methodContainerTypeName = element.GetProperty("MethodContainer").GetString();
 			var methodContainerType = loader.FindType(methodContainerTypeName);
 
-			var instanceTypeName = nodeElement.GetProperty("InstanceType").GetString();
-			object instance = string.IsNullOrEmpty(instanceTypeName) ? null : loader.CreateInstance(instanceTypeName);
+			var methodName = element.GetProperty("MethodName").GetString();
+			var isStaticMethod = element.GetProperty("StaticMethod").GetBoolean();
 
-			var methodName = nodeElement.GetProperty("MethodName").GetString();
-
-			var bindingFlags = instance != null ? BindingFlags.Instance : BindingFlags.Static;
-			var methodInfo = methodContainerType.GetMethod(methodName, bindingFlags | BindingFlags.Public | BindingFlags.NonPublic);
-			if (methodInfo == null)
-				throw new Exception($"The process method '{methodName}' is not found in '{methodContainerType}'");
+			var handlerTypeName = element.GetProperty("Handler").GetString();
 
 			// Out ports
 			List<OutPortLinks> nodeLinks = null;
-
-			JsonElement outPorts;
-			if (nodeElement.TryGetProperty("OutPorts", out outPorts))
 			{
-				var outPortsCount = outPorts.GetArrayLength();
-				if (outPortsCount > 0)
-				{
-					nodeLinks = new List<OutPortLinks>(outPortsCount);
+				var bindingFlags = isStaticMethod ? BindingFlags.Static : BindingFlags.Instance;
+				var methodInfo = methodContainerType.GetMethod(methodName, bindingFlags | BindingFlags.Public | BindingFlags.NonPublic);
+				if (methodInfo == null)
+					throw new Exception($"The process method '{methodName}' is not found in '{methodContainerType}'");
 
-					foreach (var op in outPorts.EnumerateArray())
-						LoadOutPort(op, loader, methodInfo, nodeLinks);
+				JsonElement outPorts;
+				if (element.TryGetProperty("OutPorts", out outPorts))
+				{
+					var outPortsCount = outPorts.GetArrayLength();
+					if (outPortsCount > 0)
+					{
+						nodeLinks = new List<OutPortLinks>(outPortsCount);
+
+						foreach (var op in outPorts.EnumerateArray())
+							LoadOutPort(op, loader, methodInfo, nodeLinks);
+					}
 				}
 			}
 
-			// Initialize node
-			var node = instance as Node;
+			// Create handler
+			INodeHandler handler;
+			if (string.IsNullOrEmpty(handlerTypeName))
+				handler = null;
+			else
+			{
+				var handlerType = loader.FindType(handlerTypeName);
+				handler = loader.CreateHandler(handlerType);
+
+				if (handler == null)
+					throw new Exception($"Failed to create a node handler of type '{handlerType}'");
+			}
+
+			// Create node
+			var node = handler as Node;
 			if (node != null)
 			{
-				node.InstanceMethod(nodeName, node, methodName);
-
-				// Custom data block (call back for 'this' instance only)
 				var customData = element.GetProperty("CustomData");
 				node.OnLoad(customData);
 			}
 			else
 			{
-				// Create naked node
-				node = instance != null ?
-					FromInstanceMethod(instance, methodName, nodeName) :
-					FromStaticMethod(methodContainerType, methodName, nodeName);
+				if (isStaticMethod)
+				{
+					// Create a dummy node
+					node = FromStaticMethod(handler, methodContainerType, methodName, nodeName);
+				}
+				else
+				{
+					// Create method container
+					object methodContainer;
+					if (methodContainerTypeName == handlerTypeName)
+						methodContainer = handler;
+					else
+					{
+						methodContainer = loader.CreateMethodContainer(methodContainerType, handler);
+						if (methodContainer == null)
+							throw new Exception($"Failed to create a method container of type '{methodContainerType}'");
+					}
+
+					// Load node
+					node = methodContainer as Node;
+					if (node != null)
+					{
+						// Custom data block (call back on the instance of Node and its sub-classes only)
+						var customData = element.GetProperty("CustomData");
+						node.OnLoad(customData);
+					}
+					else
+					{
+						// Create a dummy node
+						node = FromInstanceMethod(handler, methodContainer, methodName, nodeName);
+					}
+				}
 			}
+
+			// Load handler
+			if (handler != null)
+			{
+				var handlerData = element.GetProperty("HandlerData");
+				handler.OnLoad(node, handlerData);
+			}
+
+			node.m_serializationId = nodeId;
 
 			return (node, nodeLinks);
 		}
@@ -622,10 +662,10 @@ namespace GraphSharp
 
 					foreach (var ep in endPorts.EnumerateArray())
 					{
-						int nodeIndex = ep.GetProperty("NodeIndex").GetInt32();
+						var nodeId = ep.GetProperty("NodeId").GetGuid();
 						var inPortName = ep.GetProperty("InPort").GetString();
 
-						opLinks.AddEndPort(nodeIndex, inPortName);
+						opLinks.AddEndPort(nodeId, inPortName);
 					}
 				}
 			}
@@ -663,7 +703,9 @@ namespace GraphSharp
 
 				foreach (var ep in link.EndPorts)
 				{
-					var node = nodes[ep.NodeIndex];
+					var node = nodes.FirstOrDefault(n => n.GetSerializationId() == ep.NodeId);
+					if (node == null)
+						throw new Exception($"No node with ID '{ep.NodeId}' found for loading links");
 
 					var inPort = node.GetInPort(ep.InPortName);
 					if (inPort == null)

@@ -5,7 +5,8 @@ namespace GraphSharp
 	public interface ILoader
 	{
 		Type FindType(string typeName);
-		object CreateInstance(string typeName);
+		INodeHandler CreateHandler(Type type);
+		object CreateMethodContainer(Type type, INodeHandler handler);
 	}
 
 
@@ -13,7 +14,7 @@ namespace GraphSharp
 	{
 		public static readonly DefaultLoader Instance = new DefaultLoader();
 
-		public Type FindType(string typeName)
+		public virtual Type FindType(string typeName)
 		{
 			var type = Type.GetType(typeName, false);
 			if (type == null)
@@ -22,11 +23,21 @@ namespace GraphSharp
 			return type;
 		}
 
-		public object CreateInstance(string typeName)
+		public virtual INodeHandler CreateHandler(Type type)
 		{
-			var type = FindType(typeName);
+			return (INodeHandler)Activator.CreateInstance(type);
+		}
 
-			return Activator.CreateInstance(type);
+		public virtual object CreateMethodContainer(Type type, INodeHandler handler)
+		{
+			try
+			{
+				return Activator.CreateInstance(type, new[] { handler });
+			}
+			catch (MissingMethodException)
+			{
+				return Activator.CreateInstance(type);
+			}
 		}
 	}
 }

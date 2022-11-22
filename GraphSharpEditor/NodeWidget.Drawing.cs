@@ -102,7 +102,7 @@ namespace GraphSharp.Editor
 				}
 
 				// Visual image
-				if (Node is IVisualOutPort)
+				if (m_widget.Visualization != null)
 				{
 					m_width = Math.Max(View.NodeVisualSize, m_width);
 					m_height += SeparatorWidth + View.NodeVisualSize;
@@ -364,7 +364,7 @@ namespace GraphSharp.Editor
 				{
 					if (node.InPorts[i] == endPort)
 					{
-						nodeWidget = (NodeWidget)node.UserData;
+						nodeWidget = GetNodeWidgetFromNode(node);
 
 						var pinLocation = nodeWidget.m_drawing.m_inPinLocations[i];
 						pinLocation.X += nodeWidget.Location.X;

@@ -1,55 +1,91 @@
 ﻿using System;
 using System.Drawing;
+using System.Text.Json;
 
 namespace GraphSharp.Editor
 {
-	public partial class NodeWidget
+	public partial class NodeWidget : INodeHandler
 	{
 		public GraphView View { get; private set; }
 		public Node Node { get; private set; }
 		public string Name { get; private set; }
+		public IVisualization Visualization { get; private set; }
 
 		public Point Location { get; internal set; }
 		public bool Selected { get; internal set; }
 		Drawing m_drawing;
 		Bitmap m_visualImage;
 
-		internal NodeWidget(GraphView view, Node node)
+		internal void Initialize(GraphView view, Node node)
 		{
 			View = view;
 			Node = node;
 			Name = node.GetType().Name.FormatName("Node");
 
-			Node.UserData = this;
-
-			Node.OnLink += OnLinkChanged;
-			Node.OnUnlink += OnLinkChanged;
-
-			if (node is IVisualOutPort)
-				Node.OnOutValuesChanged += OnUpdateVisualImage;
+			var visualNode = node as IVisualNode;
+			if (visualNode != null)
+				Visualization = visualNode.CreateVisualization();
 
 			if (View.AutoEvaluation)
 				TryEvalute();
 		}
 
-		void OnUpdateVisualImage(Node node)
-		{
-			if (node != Node)
-				throw new Exception($"Unexcepted node instance '{node}'");
+		#region INodeHandler
 
-			var visual = (IVisualOutPort)Node;
-			m_visualImage = visual.UpdateVisualOutPort(m_visualImage);
+		public void OnSave(Node node, Utf8JsonWriter writer)
+		{
+			writer.WriteString("Location", PointToString(Location));
+		}
+
+		public void OnLoad(Node node, JsonElement element)
+		{
+			var locationText = element.GetProperty("Location").GetString();
+
+			Location = StringToPoint(locationText);
+		}
+
+		static string PointToString(Point point) => $"{point.X} {point.Y}";
+
+		static Point StringToPoint(string text)
+		{
+			var components = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+			if (components.Length != 2)
+				throw new ArgumentException($"Bad point text: {text}", nameof(text));
+
+			int x, y;
+			if (!int.TryParse(components[0], out x) || !int.TryParse(components[1], out y))
+				throw new ArgumentException($"Bad point text: {text}", nameof(text));
+
+			return new Point(x, y);
+		}
+
+		public void OnLink(OutPort selfOut, InPort otherIn)
+		{
+			OnLinkChanged(selfOut, otherIn);
+		}
+
+		public void OnUnlink(OutPort selfOut, InPort otherIn)
+		{
+			OnLinkChanged(selfOut, otherIn);
 		}
 
 		void OnLinkChanged(OutPort selfOut, InPort otherIn)
 		{
-			if (View.AutoEvaluation)
+			if (View != null && View.AutoEvaluation)
 			{
-				var nodeWidget = (NodeWidget)otherIn.Owner.UserData;
+				var nodeWidget = GetNodeWidgetFromNode(otherIn.Owner);
 				if (nodeWidget != null)
 					nodeWidget.TryEvalute();
 			}
 		}
+
+		public void OnOutValuesChanged(Node node)
+		{
+			if (Visualization != null)
+				m_visualImage = Visualization.Draw(node, m_visualImage);
+		}
+
+		#endregion
 
 		void TryEvalute()
 		{
@@ -67,10 +103,15 @@ namespace GraphSharp.Editor
 			{
 				foreach (var ep in port.EndPorts)
 				{
-					var nodeWidget = (NodeWidget)ep.Owner.UserData;
+					var nodeWidget = GetNodeWidgetFromNode(ep.Owner);
 					nodeWidget.TryEvalute();
 				}
 			}
+		}
+
+		public static NodeWidget GetNodeWidgetFromNode(Node node)
+		{
+			return (NodeWidget)node.Handler;
 		}
 
 		#region Draw

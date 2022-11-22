@@ -73,7 +73,7 @@ namespace GraphSharp.Editor
 			m_view.SaveGraph(stream);
 		}
 
-		void LoadFile(ILoader loader = null)
+		void LoadFile()
 		{
 			using var dialog = new OpenFileDialog()
 			{
@@ -86,7 +86,7 @@ namespace GraphSharp.Editor
 				return;
 
 			using var stream = dialog.OpenFile();
-			m_view.LoadGraph(stream, loader);
+			m_view.LoadGraph(stream);
 
 			FileName = dialog.FileName;
 		}

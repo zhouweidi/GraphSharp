@@ -7,14 +7,14 @@ using System.Text.Json;
 
 namespace GraphSharp
 {
-	public class Graph
+	public sealed class Graph
 	{
 		List<Node> m_nodes = new List<Node>();
 
 		public IReadOnlyList<Node> Nodes => m_nodes;
-		public IEnumerable<Node> EndNodes => from n in m_nodes
-											 where n.NoneOfOutPortsConnected() && n.CheckInPortsConnected(false)
-											 select n;
+		public IEnumerable<Node> ResultNodes => from n in m_nodes
+												where n.NoneOfOutPortsConnected() && n.CheckInPortsConnected(false)
+												select n;
 
 		#region Node operations
 
@@ -57,12 +57,12 @@ namespace GraphSharp
 
 		#region Process
 
-		class NodeFrame
+		class NodeEvaluation
 		{
 			public Node Node;
 			public int InPortIndex;
 
-			public NodeFrame(Node node)
+			public NodeEvaluation(Node node)
 			{
 				Node = node;
 			}
@@ -70,23 +70,23 @@ namespace GraphSharp
 
 		public void Evaluate()
 		{
-			var endNodes = EndNodes;
+			var resultNodes = ResultNodes;
 
 			// Check connectivity and circular dependency
-			EvaluateHelper(endNodes, false);
+			EvaluateHelper(resultNodes, false);
 
 			// Reset all out values
 			foreach (var n in m_nodes)
 				n.ResetOutValues();
 
 			// Evaluate nodes
-			EvaluateHelper(endNodes, true);
+			EvaluateHelper(resultNodes, true);
 		}
 
-		void EvaluateHelper(IEnumerable<Node> endNodes, bool evaluateNode)
+		void EvaluateHelper(IEnumerable<Node> resultNodes, bool evaluateNode)
 		{
-			var stack = new Stack<NodeFrame>(from n in endNodes
-											 select new NodeFrame(n));
+			var stack = new Stack<NodeEvaluation>(from n in resultNodes
+												  select new NodeEvaluation(n));
 			var processedNodes = new HashSet<Node>();
 
 			while (stack.Count > 0)
@@ -117,7 +117,7 @@ namespace GraphSharp
 
 						if (processedNodes.Add(dependencyNode))
 						{
-							stack.Push(new NodeFrame(dependencyNode));
+							stack.Push(new NodeEvaluation(dependencyNode));
 							break;
 						}
 					}
@@ -165,7 +165,7 @@ namespace GraphSharp
 				writer.WriteStartArray();
 
 			foreach (var node in m_nodes)
-				node.Save(writer, m_nodes);
+				node.Save(writer);
 
 			if (isJsonRoot)
 				writer.WriteEndArray();
